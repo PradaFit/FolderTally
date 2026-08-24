@@ -1,0 +1,18 @@
+1.)
+py FolderTally.py "C:\Users\YourName\Documents"
+
+===================================================
+NOTES
+
+TXT is the default. For the other formats:
+py FolderTally.py "D:\Games" -f txt
+py FolderTally.py "D:\Games" -f json
+py FolderTally.py "D:\Games" -f pdf
+
+Custom output location:
+
+py FolderTally.py "D:\Games" -f json -o "D:\Reports\games.json"
+
+If a custom output already exists:
+
+py FolderTally.py "D:\Games" -f json -o "D:\Reports\games.json" --overwrite
