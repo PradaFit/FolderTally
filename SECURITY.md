@@ -2,7 +2,7 @@
 
 ## Supported version
 
-Security fixes are intended for the current 1.x code line. Older prototypes and superseded portable builds are not maintained. Version 1.0.0 is being prepared; no release date or response-time guarantee is implied.
+Security fixes are intended for the current 1.x code line. Older prototypes and superseded portable builds are not maintained. Version 1.0.0 is the current supported release. No response-time guarantee is implied.
 
 ## Private reporting
 
