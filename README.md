@@ -1,410 +1,77 @@
 # FolderTally
 
-**Python folder size analyzer, disk usage scanner, and recursive directory inventory tool for Windows 11.**
+FolderTally is a Windows folder size analyzer and recursive file inventory tool with a desktop interface and command line. It calculates directory totals and exports TXT, JSON, and PDF reports without reading file contents. Totals describe file sizes, not physical disk allocation.
 
-FolderTally scans a folder recursively and builds a detailed inventory of its files and subfolders. It calculates folder sizes, records file metadata, identifies extensions and MIME types, and exports the results to TXT, JSON, or PDF.
+![FolderTally in dark mode after a completed sample scan](assets/screenshots/hero-dark.png)
 
-It is designed for Windows users who need a straightforward way to inspect disk usage, audit directory contents, document large folder structures, or generate file inventory reports without installing third-party Python packages.
+## Portable desktop
 
-## Features
+Extract the entire `FolderTally-v1.0.0-windows-x64.zip` into a writable folder, then run `FolderTally.exe`. Keep its `_internal` runtime folder and other included files together; the EXE alone is not the application. No installation, administrator rights, or separate Python runtime is needed. The EXE is unsigned, so Windows may show an unknown-publisher warning. Checksums are included in `SHA256SUMS.txt`.
 
-* Recursive folder and file scanning
-* Calculates total size for every scanned folder
-* Reports individual file sizes in bytes and human-readable units
-* Detects file extensions and MIME types
-* Exports reports as TXT, JSON, or PDF
-* Lists symbolic links, junctions, and Windows reparse points without traversing them
-* Records inaccessible files and folders instead of silently skipping errors
-* Uses a disk-backed temporary scan file to reduce memory pressure during large scans
-* Configurable Windows Job Object memory limit
-* Supports memory limits from 256 MiB to 2048 MiB
-* Defaults to a 2048 MiB RAM ceiling
-* Saves reports to the Windows Downloads folder by default
-* Supports custom report paths and directories
-* Supports safe overwrite control
-* Uses Microsoft Print to PDF for PDF reports
-* Falls back to Microsoft Edge for PDF generation if needed
-* No third-party Python packages required
+Choose a source folder, an existing report destination, a format, and a worker memory limit. Select Create report. Cancel or Escape stops the scan after the current file operation.
 
-## Why FolderTally?
+The window opens centered on its last-used monitor. Choose System, Light, or Dark from Theme. Windows high contrast takes priority. Theme and text size are remembered between launches. Publisher and license details are in About.
 
-Windows can show the size of a folder through File Explorer, but that does not provide a complete recursive inventory that can be saved and processed later.
+Tab and Shift+Tab navigate controls. Alt+S focuses the source, Alt+I the destination, Alt+C creates a report, and F1 opens help. Use Text size or Ctrl+Plus, Ctrl+Minus, and Ctrl+0 to enlarge or reset text. Content scrolls as needed, and keyboard focus brings the active control into view.
 
-FolderTally produces a structured report containing the folder hierarchy, file sizes, directory totals, file types, MIME information, and scan errors.
+Closing an idle app exits immediately. During a scan, the app asks before cancelling and waits for the worker to finish cleanup.
 
-It can be useful for:
+The interface exposes named controls and status announcements through Windows accessibility APIs. See [accessibility status and limitations](ACCESSIBILITY.md) for testing evidence and outstanding human checks. Full Section 508 / WCAG 2.1 AA conformance has not been established.
 
-* Disk usage analysis
-* Storage audits
-* Large directory investigation
-* File inventory generation
-* Backup planning
-* Data migration preparation
-* Folder cleanup
-* Archive analysis
-* Server and workstation documentation
-* Identifying where storage is being consumed
-* Exporting filesystem data for scripts or other tools
+Desktop reports get unique filenames; existing files are preserved. PDF generation is bundled and does not use a browser or printer.
 
-## Requirements
+![FolderTally in light mode with enlarged text and a completed report](assets/screenshots/workflow-light.png)
 
-* Windows 11
-* Python 3
-* No external Python packages
+## Command line
 
-TXT and JSON reports use Python's standard library only.
-
-For PDF reports, FolderTally attempts to use:
-
-1. Microsoft Print to PDF
-2. Microsoft Edge as a fallback
-
-PDF export is the only feature that depends on those Windows components being available.
-
-## Installation
-
-Clone or download this repository, then make sure Python is available from Command Prompt, PowerShell, or Windows Terminal.
-
-Check Python:
+The original CLI remains available as `FolderTally.py`. It uses Python's standard library.
 
 ```powershell
-python --version
+python FolderTally.py "D:\Projects"
+python FolderTally.py "D:\Projects" --format json --output "D:\Reports"
+python FolderTally.py "D:\Projects" --format txt --output "D:\Reports\inventory.txt" --ram-cap-mb 512
+
 ```
 
-FolderTally does not require `pip install` or a `requirements.txt` file because it uses Python standard-library modules.
+| Option | Meaning |
+| --- | --- |
+| `target` | Folder to inventory. |
+| `-f`, `--format` | `txt`, `json`, or `pdf`. Default: TXT. |
+| `-o`, `--output` | Existing report folder or a complete filename. Default: Downloads. |
+| `--ram-cap-mb` | Worker/process memory ceiling, 256 to 2048 MiB. Default: 2048. |
+| `--no-hard-cap` | CLI only: disable the Windows Job Object memory ceiling. |
+| `--overwrite` | CLI only: explicitly permit replacement of the selected output file. |
+| `-h`, `--help` | Show command-line help. |
 
-## Basic Usage
+The CLI's legacy PDF route uses Microsoft Print to PDF, with Microsoft Edge as a fallback. The desktop PDF renderer is separate; its accessibility changes do not apply to legacy CLI PDFs.
 
-Run FolderTally and provide the folder you want to scan:
+## Report contents
+
+Reports include relative paths, entry types, individual sizes, accumulated folder sizes, extensions, inferred MIME types, scan errors, and summary counts. MIME and encoding fields come from filename-based MIME lookup, not content inspection.
+
+JSON exposes these values in an `entries` array. TXT is useful for searching and reviewing an inventory. Desktop PDFs use PDF 1.7, embedded fonts, document language, ordered text tags, and PDF/UA-1 identification metadata. Representative reports pass veraPDF's PDF/UA-1 machine checks; human reading-order and screen-reader review remains necessary. Filenames outside the embedded font's character coverage use Unicode escapes in PDF; TXT and JSON preserve the original characters.
+
+Symbolic links, junctions, and other reparse points detected during a scan are listed without traversing their targets. Fresh checks around directory opening reject detected reparse, containment, and identity changes. These path-based checks are not a security boundary against an adversary concurrently replacing directories or ancestors. Do not scan actively hostile trees. Hard-linked entries are counted individually.
+
+## Limits and privacy
+
+A scan reflects the current account's permissions. Read errors mean the inventory may be incomplete. Files can change during scanning; reports are not filesystem snapshots.
+
+The scanner uses a temporary disk-backed inventory. Report generation, particularly PDF tagging, can require additional memory. Use TXT or JSON for very large trees. Cancellation waits for the current Windows file operation; forced termination or power loss can leave temporary files.
+
+The desktop stores only the monitor identifier, theme, and text size at `%LOCALAPPDATA%\PradaFit\FolderTally\window.json`. It does not retain scan paths or report history. If the previous monitor is unavailable, it uses the monitor under the pointer, then the primary display. Portable does not mean zero-trace: preferences, reports, and temporary scan files are written locally. Reports contain filenames and folder names; review them before sharing. No telemetry, automatic updates, or account sign-in is included.
+
+## Development and license
+
+Run the desktop from source with Python and the packages in `requirements.txt`. The CLI itself uses only the standard library.
 
 ```powershell
-python FolderTally.py "C:\Users\YourName\Documents"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe FolderTallyGUI.py
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-By default, FolderTally creates a TXT report in your Windows Downloads folder.
+For packaging, use Windows x64, Python 3.14.7, and separate `.build-venv` and `.package-venv` environments containing `requirements-build.txt`. Run `tools/fetch_qt_sources.py` once to obtain the hash-pinned library sources, then `Build-Portable.ps1`. Each build creates a new timestamped directory under `dist`. See [library replacement and rebuild instructions](packaging/LIBRARY_REPLACEMENT.md).
 
-Example output filename:
-
-```text
-FolderTally_Documents_20260823_173000.txt
-```
-
-## Export Formats
-
-FolderTally supports three report formats:
-
-* `txt`
-* `json`
-* `pdf`
-
-### TXT Report
-
-```powershell
-python FolderTally.py "D:\Projects" --format txt
-```
-
-TXT reports are designed for quick inspection, searching, archiving, and sharing.
-
-### JSON Report
-
-```powershell
-python FolderTally.py "D:\Projects" --format json
-```
-
-JSON output is useful when FolderTally data needs to be processed by another Python script, PowerShell script, application, database importer, or automation workflow.
-
-### PDF Report
-
-```powershell
-python FolderTally.py "D:\Projects" --format pdf
-```
-
-FolderTally first attempts to generate the PDF through Microsoft Print to PDF. If that fails, it attempts to use Microsoft Edge in headless mode.
-
-## Custom Output Location
-
-Use `-o` or `--output` to choose where the report should be written.
-
-```powershell
-python FolderTally.py "D:\Projects" --output "D:\Reports"
-```
-
-You can also specify a complete output filename:
-
-```powershell
-python FolderTally.py "D:\Projects" --format json --output "D:\Reports\projects.json"
-```
-
-If only a directory is provided, FolderTally automatically generates the report filename.
-
-## Memory Limit
-
-FolderTally can apply a Windows Job Object memory limit to the running process.
-
-The default RAM ceiling is:
-
-```text
-2048 MiB
-```
-
-Set a different limit with:
-
-```powershell
-python FolderTally.py "D:\Data" --ram-cap-mb 1024
-```
-
-Supported range:
-
-```text
-256 MiB to 2048 MiB
-```
-
-The memory limit can be disabled:
-
-```powershell
-python FolderTally.py "D:\Data" --no-hard-cap
-```
-
-Disabling the hard cap removes the Windows Job Object memory restriction for that run.
-
-## Command-Line Options
-
-```text
-usage: FolderTally [-h]
-                   [-f {txt,json,pdf}]
-                   [-o OUTPUT]
-                   [--ram-cap-mb RAM_CAP_MB]
-                   [--overwrite]
-                   [--no-hard-cap]
-                   target
-```
-
-### `target`
-
-Folder that FolderTally will recursively scan.
-
-```powershell
-python FolderTally.py "C:\Users\YourName\Downloads"
-```
-
-### `-f`, `--format`
-
-Select the output format.
-
-```powershell
-python FolderTally.py "D:\Data" --format json
-```
-
-Available formats:
-
-```text
-txt
-json
-pdf
-```
-
-Default:
-
-```text
-txt
-```
-
-### `-o`, `--output`
-
-Choose a custom output file or directory.
-
-```powershell
-python FolderTally.py "D:\Data" -o "D:\Reports"
-```
-
-### `--ram-cap-mb`
-
-Set the hard memory ceiling.
-
-```powershell
-python FolderTally.py "D:\Data" --ram-cap-mb 512
-```
-
-Valid range:
-
-```text
-256 to 2048 MiB
-```
-
-### `--overwrite`
-
-Allow FolderTally to replace an existing custom output file.
-
-```powershell
-python FolderTally.py "D:\Data" --format json --output "D:\Reports\data.json" --overwrite
-```
-
-Without this option, FolderTally will stop instead of replacing an existing report.
-
-### `--no-hard-cap`
-
-Run without the Windows Job Object memory cap.
-
-```powershell
-python FolderTally.py "D:\Data" --no-hard-cap
-```
-
-## Example Commands
-
-Scan a folder and create the default TXT report:
-
-```powershell
-python FolderTally.py "C:\Users\YourName\Documents"
-```
-
-Create a JSON disk usage report:
-
-```powershell
-python FolderTally.py "D:\Projects" -f json
-```
-
-Create a PDF folder inventory:
-
-```powershell
-python FolderTally.py "D:\Archive" -f pdf
-```
-
-Save the report to another directory:
-
-```powershell
-python FolderTally.py "D:\Projects" -o "D:\Reports"
-```
-
-Create a JSON report with a 1 GiB memory ceiling:
-
-```powershell
-python FolderTally.py "D:\Projects" -f json --ram-cap-mb 1024
-```
-
-Overwrite an existing report:
-
-```powershell
-python FolderTally.py "D:\Projects" -f json -o "D:\Reports\projects.json" --overwrite
-```
-
-## What FolderTally Records
-
-Each filesystem entry can include information such as:
-
-* Relative path
-* Tree depth
-* Entry type
-* Size in bytes
-* Human-readable size
-* File extension
-* MIME type
-* Encoding information when detected by Python's MIME database
-* Filesystem access errors
-
-Folder entries also contain the accumulated size of files below that folder.
-
-The report header includes:
-
-* FolderTally version
-* Target directory
-* Report generation time
-* Total file size
-* File count
-* Folder count
-* Link and reparse point count
-* Other entry count
-* Error count
-* Excluded temporary or report file count
-* Configured RAM ceiling
-
-## Symbolic Links, Junctions, and Reparse Points
-
-FolderTally does not recursively follow symbolic links, junctions, or nonstandard directory reparse points.
-
-They are included in the inventory, but their targets are not traversed.
-
-This behavior helps keep a scan inside the intended directory tree and avoids recursive filesystem paths caused by links or junctions.
-
-## Error Handling
-
-FolderTally is designed to continue scanning when individual filesystem entries cannot be accessed.
-
-Errors such as permission failures are recorded in the generated report so the affected path can be reviewed afterward.
-
-If the configured memory ceiling is reached, FolderTally stops and reports the condition rather than intentionally continuing without the configured limit.
-
-## TXT Output
-
-TXT reports provide a readable recursive directory inventory.
-
-Example:
-
-```text
-00000001 | . | Type=Folder | Size=4.82 GiB | Bytes=5175435591
-00000002 |   Projects | Type=Folder | Size=2.10 GiB | Bytes=2254857830
-00000003 |     example.zip | Type=File | Size=128.34 MiB | Bytes=134574080 | Extension=.zip | MIME=application/zip
-```
-
-Actual values depend on the scanned directory.
-
-## JSON Output
-
-JSON reports contain machine-readable metadata and an `entries` array.
-
-Each entry follows a structure similar to:
-
-```json
-{
-  "path": "Projects\\example.zip",
-  "depth": 2,
-  "kind": "File",
-  "size_bytes": 134574080,
-  "size_human": "128.34 MiB",
-  "extension": ".zip",
-  "mime_type": "application/zip",
-  "encoding": null,
-  "error": null
-}
-```
-
-This makes FolderTally suitable for additional processing, filtering, automation, reporting, or integration with other tools.
-
-## How It Works
-
-FolderTally uses Python's `os.scandir()` to walk the target directory.
-
-Instead of keeping the entire directory inventory in memory, scan records are written to a temporary disk-backed JSONL spool file. Folder sizes are updated as each directory finishes scanning.
-
-After the scan is complete, the spool data is streamed into the selected TXT, JSON, or PDF report format.
-
-On Windows, the optional hard memory ceiling is implemented with Windows Job Objects through Python's `ctypes` interface.
-
-## Project Goals
-
-FolderTally is intended to stay focused on filesystem inventory and folder size analysis.
-
-The main goals are:
-
-* Accurate recursive directory reporting
-* Predictable memory usage
-* Useful machine-readable output
-* Useful human-readable output
-* Safe handling of Windows filesystem links
-* Minimal dependencies
-* Straightforward command-line operation
-
-## License
-
-FolderTally is licensed under the **GNU General Public License v3.0**.
-
-See the [`LICENSE`](LICENSE) file for the complete license terms.
-
-If you modify or redistribute FolderTally, make sure your use and distribution comply with the GPLv3 license.
-
-## Disclaimer
-
-FolderTally reports filesystem information available to the account running the program.
-
-Files or directories that Windows does not permit the process to access may be reported as errors.
-
-Review generated reports before sharing them if the scanned directory contains sensitive filenames, directory names, or filesystem information.
+Copyright (C) 2026 PradaFit. The current first-party FolderTally source is source-available under the [FolderTally Noncommercial License](LICENSE), with separate commercial licensing available from PradaFit. Personal use and noncommercial education/research are free. Business use, paid integration, commercial hosting, rebranding/resale, and OEM distribution need a separate agreement. Royalties, if any, are negotiated OEM terms, not an automatic fee. Earlier GPL-licensed copies keep their existing rights. Third-party libraries keep their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

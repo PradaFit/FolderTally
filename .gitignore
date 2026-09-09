@@ -1,5 +1,7 @@
 # Local command notes
 FolderTally_Cmds.txt
+/_Internal/
+/_ReviewEvidence/
 
 # Python generated files and caches
 __pycache__/
@@ -20,3 +22,12 @@ venv/
 # Windows metadata
 Thumbs.db
 Desktop.ini
+
+# Local portable build and verification artifacts
+.build-python/
+.build-cache/
+.build-venv/
+.package-venv/
+build/
+dist/
+_verification/

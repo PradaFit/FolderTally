@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: LicenseRef-FolderTally-Noncommercial-1.0
 # Copyright (C) 2026 PradaFit
 
 import argparse
@@ -9,6 +9,7 @@ import mimetypes
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -109,6 +110,10 @@ class Frame:
         self.iterator = iterator
         self.subtotal = 0
         self.size_offset = size_offset
+
+
+class ScanCancelled(Exception):
+    """Cooperative interruption requested by the desktop interface."""
 
 
 def guid_from_string(value):
@@ -302,7 +307,7 @@ def classify_entry(entry):
     if is_junction:
         return "Junction", int(st.st_size), False
     if entry.is_dir(follow_symlinks=False):
-        if is_reparse and junction_method is None:
+        if is_reparse:
             return "Reparse Folder", int(st.st_size), False
         return "Folder", 0, True
     if entry.is_file(follow_symlinks=False):
@@ -314,7 +319,47 @@ def classify_entry(entry):
     return "Other", int(st.st_size), False
 
 
-def scan_to_spool(target, spool_path, excluded_paths):
+def scan_to_spool(target, spool_path, excluded_paths, progress=None, cancelled=None):
+    stack = []
+    try:
+        return _scan_to_spool(target, spool_path, excluded_paths, stack, progress, cancelled)
+    finally:
+        for frame in stack:
+            frame.iterator.close()
+
+
+def checked_scandir(path, root, expected=None):
+    """Recheck a directory immediately around opening it; do not trust cached entries."""
+    def validate():
+        info = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & REPARSE_POINT:
+            raise OSError("Directory became a link, reparse point, or non-directory; traversal refused.")
+        resolved = os.path.normcase(os.path.realpath(path, strict=True))
+        try:
+            contained = os.path.commonpath((root, resolved)) == root
+        except ValueError:
+            contained = False
+        if not contained:
+            raise OSError("Directory resolves outside the source folder; traversal refused.")
+        return info
+
+    before = validate()
+    # Windows DirEntry.stat can omit identity fields; fresh stat still supplies
+    # the before/after identity checks in that case.
+    if expected is not None and expected.st_ino and expected.st_dev and (before.st_dev, before.st_ino) != (expected.st_dev, expected.st_ino):
+        raise OSError("Directory changed after classification; traversal refused.")
+    iterator = os.scandir(path)
+    try:
+        after = validate()
+        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            raise OSError("Directory changed while opening; traversal refused.")
+    except BaseException:
+        iterator.close()
+        raise
+    return iterator
+
+
+def _scan_to_spool(target, spool_path, excluded_paths, stack, progress, cancelled):
     normalized_excludes = {os.path.normcase(os.path.abspath(p)) for p in excluded_paths}
     counts = {
         "files": 0,
@@ -326,7 +371,8 @@ def scan_to_spool(target, spool_path, excluded_paths):
     }
     with open(spool_path, "w+b") as fp:
         try:
-            root_iterator = os.scandir(target)
+            root_path = os.path.normcase(os.path.realpath(target, strict=True))
+            root_iterator = checked_scandir(target, root_path)
             root_error = ""
         except OSError as exc:
             root_iterator = None
@@ -337,8 +383,13 @@ def scan_to_spool(target, spool_path, excluded_paths):
             patch_size(fp, root_offset, 0)
             fp.flush()
             return 0, counts
-        stack = [Frame(target, "", 0, root_iterator, root_offset)]
+        stack.append(Frame(target, "", 0, root_iterator, root_offset))
+        scanned_bytes = 0
         while stack:
+            if cancelled and cancelled():
+                raise ScanCancelled()
+            if progress:
+                progress(scanned_bytes, counts)
             frame = stack[-1]
             try:
                 entry = next(frame.iterator)
@@ -387,7 +438,7 @@ def scan_to_spool(target, spool_path, excluded_paths):
             if traversable:
                 counts["folders"] += 1
                 try:
-                    child_iterator = os.scandir(entry.path)
+                    child_iterator = checked_scandir(entry.path, root_path, entry.stat(follow_symlinks=False))
                 except OSError as exc:
                     counts["errors"] += 1
                     write_record(
@@ -421,6 +472,7 @@ def scan_to_spool(target, spool_path, excluded_paths):
             write_record(fp, frame.depth + 1, kind, size, rel)
             if kind in ("File", "Reparse File"):
                 frame.subtotal += size
+                scanned_bytes += size
                 counts["files"] += 1
             elif kind in ("Symlink", "Junction", "Reparse Folder", "Reparse Point"):
                 counts["links_and_reparse_points"] += 1
@@ -432,9 +484,11 @@ def scan_to_spool(target, spool_path, excluded_paths):
         return int(total_text), counts
 
 
-def iter_records(spool_path):
+def iter_records(spool_path, cancelled=None):
     with open(spool_path, "rb") as fp:
         for raw in fp:
+            if cancelled and cancelled():
+                raise ScanCancelled()
             depth, kind, size_text, rel_path, error = json.loads(raw.decode("utf-8"))
             yield int(depth), kind, int(size_text), rel_path, error
 
@@ -462,16 +516,16 @@ def header_lines(target, generated, total_size, counts, ram_cap_mb):
         f"Errors: {counts['errors']}",
         f"Excluded report/temp files: {counts['excluded']}",
         f"RAM cap: {ram_cap_mb} MiB",
-        "Link policy: symbolic links, junctions, and nonstandard directory reparse points are listed but not traversed.",
+        "Link policy: detected symbolic links, junctions, and directory reparse points are listed but not traversed. Concurrent directory changes can race path-based checks.",
         "",
     ]
 
 
-def iter_text_lines(spool_path, target, generated, total_size, counts, ram_cap_mb):
+def iter_text_lines(spool_path, target, generated, total_size, counts, ram_cap_mb, cancelled=None):
     for line in header_lines(target, generated, total_size, counts, ram_cap_mb):
         yield line
     index = 0
-    for depth, kind, size, rel_path, error in iter_records(spool_path):
+    for depth, kind, size, rel_path, error in iter_records(spool_path, cancelled):
         index += 1
         extension, mime_type, encoding = type_fields(kind, rel_path)
         indent = "  " * depth
@@ -487,7 +541,7 @@ def iter_text_lines(spool_path, target, generated, total_size, counts, ram_cap_m
         yield f"{index:08d} | {indent}{rel_path} | " + " | ".join(details)
 
 
-def write_txt(output_path, spool_path, target, generated, total_size, counts, ram_cap_mb):
+def write_txt(output_path, spool_path, target, generated, total_size, counts, ram_cap_mb, cancelled=None):
     with open(output_path, "w", encoding="utf-8", newline="\n") as out:
         for line in iter_text_lines(
             spool_path,
@@ -496,6 +550,7 @@ def write_txt(output_path, spool_path, target, generated, total_size, counts, ra
             total_size,
             counts,
             ram_cap_mb,
+            cancelled,
         ):
             out.write(line)
             out.write("\n")
@@ -516,7 +571,7 @@ def entry_object(depth, kind, size, rel_path, error):
     }
 
 
-def write_json(output_path, spool_path, target, generated, total_size, counts, ram_cap_mb):
+def write_json(output_path, spool_path, target, generated, total_size, counts, ram_cap_mb, cancelled=None):
     prefix = {
         "program": PROGRAM,
         "version": VERSION,
@@ -526,7 +581,7 @@ def write_json(output_path, spool_path, target, generated, total_size, counts, r
         "total_size_human": human_size(total_size),
         "counts": counts,
         "ram_cap_mib": ram_cap_mb,
-        "link_policy": "Symbolic links, junctions, and nonstandard directory reparse points are listed but not traversed.",
+        "link_policy": "Detected symbolic links, junctions, and directory reparse points are listed but not traversed. Concurrent directory changes can race path-based checks.",
     }
     with open(output_path, "w", encoding="utf-8", newline="\n") as out:
         out.write("{\n")
@@ -539,7 +594,7 @@ def write_json(output_path, spool_path, target, generated, total_size, counts, r
             out.write(",\n")
         out.write('  "entries": [\n')
         first = True
-        for record in iter_records(spool_path):
+        for record in iter_records(spool_path, cancelled):
             if not first:
                 out.write(",\n")
             out.write("    ")
@@ -766,6 +821,7 @@ def write_pdf_edge(output_path, lines):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             shell=False,
+            timeout=120,
         )
         if result.returncode != 0 or not output_path.exists() or output_path.stat().st_size == 0:
             raise OSError("Edge PDF fallback failed to create the output file.")
@@ -861,6 +917,8 @@ def main():
         parser.error(f"Output already exists. Use --overwrite to replace it: {output_path}")
     if same_path(target, output_path):
         parser.error("Output file cannot be the target folder.")
+    if output_path.is_dir():
+        parser.error("Output file cannot be an existing folder.")
     if args.no_hard_cap:
         cap_message = "Hard memory cap disabled by command line."
     else:
@@ -868,10 +926,14 @@ def main():
         if not ok:
             parser.error(cap_message + " Use --no-hard-cap only if you accept losing the hard cap.")
     mimetypes.init()
+    final_output = output_path
+    staging = tempfile.TemporaryDirectory(prefix=".FolderTally_", dir=final_output.parent)
+    output_path = Path(staging.name) / f"report.{args.format}"
     spool_handle = tempfile.NamedTemporaryFile(
         prefix="FolderTally_",
         suffix=".jsonl",
         delete=False,
+        dir=staging.name,
     )
     spool_path = Path(spool_handle.name)
     spool_handle.close()
@@ -879,19 +941,17 @@ def main():
     print(f"{PROGRAM} {VERSION}")
     print(f"Target: {target}")
     print(f"Format: {args.format.upper()}")
-    print(f"Output: {output_path}")
+    print(f"Output: {final_output}")
     print(f"Memory: {cap_message}")
     print("Scanning...")
     try:
         total_size, counts = scan_to_spool(
             target,
             spool_path,
-            [str(output_path), str(spool_path)],
+            [str(final_output), staging.name],
         )
         print(f"Total file size: {human_size(total_size)} ({total_size} bytes)")
         print(f"Files: {counts['files']} | Folders: {counts['folders']} | Errors: {counts['errors']}")
-        if output_path.exists() and args.overwrite:
-            output_path.unlink()
         if args.format == "txt":
             write_txt(
                 output_path,
@@ -924,7 +984,9 @@ def main():
                 counts,
                 args.ram_cap_mb,
             )
-        print(f"Done: {output_path}")
+        from foldertally_service import publish_report
+        publish_report(output_path, final_output, overwrite=args.overwrite)
+        print(f"Done: {final_output}")
         print(f"Writer: {backend}")
         if counts["errors"]:
             print("Some entries could not be read. Their errors are recorded in the report.")
@@ -958,6 +1020,7 @@ def main():
             spool_path.unlink()
         except OSError:
             pass
+        staging.cleanup()
 
 
 if __name__ == "__main__":
